@@ -27,11 +27,13 @@ Pre-built image: `ghcr.io/jimangel/adk-local-gemma:latest`
 ![Development setup](pics/dev.png)
 
 ```bash
-# Run with mounted kubeconfig
+# select kubeconfig to use
 export KUBECONFIG="your-kubeconfig"
+
+# Run using a cloud LLM
 export GOOGLE_API_KEY="your-api-key"
 
-docker run -d \
+docker run \
   --name adk-local-test \
   -p 8082:8081 \
   -v ${KUBECONFIG}:/home/appuser/kubeconfig:ro \
@@ -40,10 +42,28 @@ docker run -d \
   -e LLM_TYPE="cloud" \
   -e GEMINI_MODEL="gemini-2.5-pro" \
   -e GOOGLE_GENAI_USE_VERTEXAI="FALSE" \
+  -e LLM_TYPE=cloud \
   ghcr.io/jimangel/adk-local-gemma:latest
-```
 
-Access UI: http://localhost:8082
+# Access UI: http://localhost:8082
+
+# Run using a local LLM
+export LM_STUDIO_API_BASE=http://127.0.0.1:1234/v1/
+export LM_STUDIO_MODEL=qwen/qwen3-1.7b
+
+docker run \
+  --name adk-local-test \
+  --network host \
+  -e PORT=8888 \
+  -v ${KUBECONFIG}:/home/appuser/kubeconfig:ro \
+  -e KUBECONFIG=/home/appuser/kubeconfig \
+  -e LLM_TYPE=local \
+  -e LM_STUDIO_MODEL=${LM_STUDIO_MODEL} \
+  -e LM_STUDIO_API_BASE=${LM_STUDIO_API_BASE} \
+  ghcr.io/jimangel/adk-local-gemma:latest
+
+# Access UI: http://localhost:8888
+```
 
 **Clean up:**
 ```bash
@@ -59,16 +79,14 @@ The `k8s-deployment.yaml` includes:
 
 **Deploy:**
 ```bash
+export GOOGLE_API_KEY="your-api-key"
+
 # 1. Create API key secret
 kubectl create secret generic adk-secrets \
-  --from-literal=GOOGLE_API_KEY="your-api-key"
+  --from-literal=GOOGLE_API_KEY=${GOOGLE_API_KEY}
 
 # 2. Apply manifest
 kubectl apply -f k8s-deployment.yaml
-
-# 3. Verify deployment
-kubectl get pods -l app=adk-local-gemma
-kubectl get svc adk-local-gemma
 ```
 
 **Access service:**
@@ -85,6 +103,9 @@ kubectl get svc adk-local-gemma \
 ```bash
 kubectl delete -f k8s-deployment.yaml
 kubectl delete secret adk-secrets
+
+# debug // check env vars
+kubectl exec -it deploy/adk-local-gemma -- sh
 ```
 
 ## Configuration
