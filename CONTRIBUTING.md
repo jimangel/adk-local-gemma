@@ -128,9 +128,10 @@ def get_configmaps(namespace: str = "all") -> Dict[str, Any]:
 # Build the Docker image
 docker build -t adk-local-gemma:latest .
 
+# TO PUBLISH:
 # Tag for your registry
-docker tag adk-local-gemma:latest your-registry/adk-local-gemma:latest
+docker tag adk-local-gemma:latest ghcr.io/jimangel/adk-local-gemma:latest
 
 # Push to registry
-docker push your-registry/adk-local-gemma:latest
+docker push ghcr.io/jimangel/adk-local-gemma:latest
 ```

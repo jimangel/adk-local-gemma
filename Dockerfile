@@ -1,5 +1,5 @@
 # Use Python 3.11 slim image as base
-FROM python:3.11-slim
+FROM python:3.14-rc-slim
 
 # Set working directory
 WORKDIR /app
@@ -16,8 +16,8 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the entire project
-COPY . .
+# Copy only the ADK agent code
+COPY kubernetes_agent/ ./kubernetes_agent/
 
 # Create a non-root user for security
 RUN useradd -m -u 1000 appuser && \
@@ -31,6 +31,7 @@ EXPOSE 8081
 
 # Set environment variable for port (default to 8081)
 ENV PORT=8081
+ENV HOST=0.0.0.0
 
 # Run adk web with configurable port
-CMD ["sh", "-c", "adk web --port ${PORT}"]
+CMD ["sh", "-c", "adk web --host ${HOST} --port ${PORT}"]

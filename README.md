@@ -28,12 +28,15 @@ Pre-built image: `ghcr.io/jimangel/adk-local-gemma:latest`
 
 ```bash
 # Run with mounted kubeconfig
+export KUBECONFIG="your-kubeconfig"
+export GOOGLE_API_KEY="your-api-key"
+
 docker run -d \
   --name adk-local-test \
   -p 8082:8081 \
-  -v ~/.kube/config:/home/appuser/kubeconfig:ro \
+  -v ${KUBECONFIG}:/home/appuser/kubeconfig:ro \
   -e KUBECONFIG=/home/appuser/kubeconfig \
-  -e GOOGLE_API_KEY="your-api-key" \
+  -e GOOGLE_API_KEY=${GOOGLE_API_KEY} \
   -e LLM_TYPE="cloud" \
   -e GEMINI_MODEL="gemini-2.5-pro" \
   -e GOOGLE_GENAI_USE_VERTEXAI="FALSE" \
