@@ -9,10 +9,17 @@ Supports both cloud LLMs (Gemini) and local LLMs (LM Studio).
 import os
 import json
 from typing import Dict, List, Optional, Any
-from google.adk.agents import Agent
 from kubernetes import client, config
-from kubernetes.client.rest import ApiException
+from kubernetes.client import ApiException
 from dotenv import load_dotenv
+
+# Try to import ADK components
+try:
+    from google.adk import Agent
+    ADK_AVAILABLE = True
+except ImportError:
+    print("Error: Could not import ADK Agent. Please install: pip install google-adk")
+    ADK_AVAILABLE = False
 
 # Try to import LiteLlm for local model support
 try:
@@ -21,15 +28,86 @@ try:
 except ImportError:
     LITELLM_AVAILABLE = False
     print("Warning: LiteLlm not available. Local LLM support disabled.")
-    print("To enable local LLM support, ensure you have the latest google-adk version.")
 
 # Load environment variables from .env file
 load_dotenv()
 
+# Expand environment variables in KUBECONFIG if it exists
+if 'KUBECONFIG' in os.environ:
+    # Expand ${HOME} and ~ in the path
+    original = os.environ['KUBECONFIG']
+    expanded = os.path.expanduser(os.path.expandvars(original))
+    os.environ['KUBECONFIG'] = expanded
+    if original != expanded:
+        print(f"Expanded KUBECONFIG from '{original}' to '{expanded}'")
 
-def load_kubernetes_config(kubeconfig_path: Optional[str] = None) -> str:
+# Initialize Kubernetes configuration at module level
+KUBE_CONFIG_LOADED = False
+KUBE_CONFIG_STATUS = None
+
+def init_kubernetes_config():
+    """Initialize Kubernetes configuration once at startup."""
+    global KUBE_CONFIG_LOADED, KUBE_CONFIG_STATUS
+    
+    if KUBE_CONFIG_LOADED:
+        return KUBE_CONFIG_STATUS
+    
+    # Try multiple config sources
+    configs_to_try = []
+    
+    # 1. KUBECONFIG environment variable (already expanded above)
+    kubeconfig_env = os.environ.get('KUBECONFIG')
+    if kubeconfig_env:
+        # Handle multiple paths separated by :
+        for path in kubeconfig_env.split(':'):
+            # Path should already be expanded, but double-check
+            expanded_path = os.path.expanduser(os.path.expandvars(path))
+            if os.path.exists(expanded_path):
+                configs_to_try.append(('env_var', expanded_path))
+    
+    # 2. Default kubeconfig location
+    default_config = os.path.expanduser("~/.kube/config")
+    if os.path.exists(default_config):
+        configs_to_try.append(('default', default_config))
+    
+    # 3. Try common kubespray location
+    kubespray_config = os.path.expanduser("~/kubespray/inventory/onemachine/artifacts/admin.conf")
+    if os.path.exists(kubespray_config):
+        configs_to_try.append(('kubespray', kubespray_config))
+    
+    # Try loading each config
+    for config_type, config_path in configs_to_try:
+        try:
+            config.load_kube_config(config_file=config_path)
+            KUBE_CONFIG_LOADED = True
+            KUBE_CONFIG_STATUS = f"Loaded kubeconfig from {config_type}: {config_path}"
+            print(KUBE_CONFIG_STATUS)
+            return KUBE_CONFIG_STATUS
+        except Exception as e:
+            print(f"Failed to load config from {config_path}: {e}")
+            continue
+    
+    # Try in-cluster config as last resort
+    try:
+        config.load_incluster_config()
+        KUBE_CONFIG_LOADED = True
+        KUBE_CONFIG_STATUS = "Loaded in-cluster config (running inside Kubernetes)"
+        print(KUBE_CONFIG_STATUS)
+        return KUBE_CONFIG_STATUS
+    except Exception as e:
+        KUBE_CONFIG_STATUS = f"Failed to load any Kubernetes config. Tried: {[c[1] for c in configs_to_try]}"
+        print(f"Warning: {KUBE_CONFIG_STATUS}")
+        print("To fix this, set KUBECONFIG environment variable:")
+        print("  export KUBECONFIG=~/kubespray/inventory/onemachine/artifacts/admin.conf")
+        return KUBE_CONFIG_STATUS
+
+# Do NOT initialize config on import - let functions handle it
+# This prevents connection attempts before env vars are properly set
+
+
+def ensure_kubernetes_config(kubeconfig_path: Optional[str] = None) -> str:
     """
-    Load Kubernetes configuration from kubeconfig file or service account.
+    Ensure Kubernetes configuration is loaded. Will attempt to load if not already loaded.
     
     Args:
         kubeconfig_path: Optional path to kubeconfig file. If not provided,
@@ -38,27 +116,28 @@ def load_kubernetes_config(kubeconfig_path: Optional[str] = None) -> str:
     Returns:
         str: Status message indicating which config was loaded
     """
-    try:
-        if kubeconfig_path and os.path.exists(kubeconfig_path):
-            # Load from specified kubeconfig file
-            config.load_kube_config(config_file=kubeconfig_path)
-            return f"Loaded kubeconfig from: {kubeconfig_path}"
-        elif os.environ.get('KUBECONFIG'):
-            # Load from KUBECONFIG environment variable
-            kubeconfig_env = os.environ.get('KUBECONFIG')
-            config.load_kube_config(config_file=kubeconfig_env)
-            return f"Loaded kubeconfig from KUBECONFIG env var: {kubeconfig_env}"
-        else:
-            # Try to load in-cluster config (for running inside a pod)
-            config.load_incluster_config()
-            return "Loaded in-cluster config (running inside Kubernetes)"
-    except config.ConfigException as e:
-        # Fallback to default kubeconfig location
+    global KUBE_CONFIG_LOADED, KUBE_CONFIG_STATUS
+    
+    # Force reload if specific path is provided
+    if kubeconfig_path:
         try:
-            config.load_kube_config()
-            return "Loaded kubeconfig from default location (~/.kube/config)"
-        except Exception as fallback_error:
-            return f"Failed to load any Kubernetes config: {str(e)}, {str(fallback_error)}"
+            expanded_path = os.path.expanduser(kubeconfig_path)
+            if os.path.exists(expanded_path):
+                config.load_kube_config(config_file=expanded_path)
+                KUBE_CONFIG_LOADED = True
+                KUBE_CONFIG_STATUS = f"Loaded kubeconfig from specified path: {expanded_path}"
+                return KUBE_CONFIG_STATUS
+            else:
+                return f"Specified kubeconfig file not found: {expanded_path}"
+        except Exception as e:
+            return f"Failed to load specified kubeconfig: {str(e)}"
+    
+    # If already loaded, return current status
+    if KUBE_CONFIG_LOADED and KUBE_CONFIG_STATUS:
+        return KUBE_CONFIG_STATUS
+    
+    # Otherwise, try to initialize
+    return init_kubernetes_config()
 
 
 def get_pods(namespace: str = "all", label_selector: Optional[str] = None) -> Dict[str, Any]:
@@ -73,8 +152,16 @@ def get_pods(namespace: str = "all", label_selector: Optional[str] = None) -> Di
         dict: Status and list of pods with their details
     """
     try:
-        # Load config
-        config_status = load_kubernetes_config()
+        # Ensure config is loaded
+        config_status = ensure_kubernetes_config()
+        
+        # Check if config loaded successfully
+        if "Failed" in config_status:
+            return {
+                "status": "error",
+                "error_message": config_status,
+                "hint": "Please set KUBECONFIG environment variable or ensure ~/.kube/config exists"
+            }
         
         # Create API client
         v1 = client.CoreV1Api()
@@ -146,8 +233,16 @@ def get_nodes() -> Dict[str, Any]:
         dict: Status and list of nodes with their details
     """
     try:
-        # Load config
-        config_status = load_kubernetes_config()
+        # Ensure config is loaded
+        config_status = ensure_kubernetes_config()
+        
+        # Check if config loaded successfully
+        if "Failed" in config_status:
+            return {
+                "status": "error",
+                "error_message": config_status,
+                "hint": "Please set KUBECONFIG environment variable or ensure ~/.kube/config exists"
+            }
         
         # Create API client
         v1 = client.CoreV1Api()
@@ -229,8 +324,16 @@ def get_namespaces() -> Dict[str, Any]:
         dict: Status and list of namespaces
     """
     try:
-        # Load config
-        config_status = load_kubernetes_config()
+        # Ensure config is loaded
+        config_status = ensure_kubernetes_config()
+        
+        # Check if config loaded successfully
+        if "Failed" in config_status:
+            return {
+                "status": "error",
+                "error_message": config_status,
+                "hint": "Please set KUBECONFIG environment variable or ensure ~/.kube/config exists"
+            }
         
         # Create API client
         v1 = client.CoreV1Api()
@@ -280,8 +383,16 @@ def get_services(namespace: str = "all") -> Dict[str, Any]:
         dict: Status and list of services with their details
     """
     try:
-        # Load config
-        config_status = load_kubernetes_config()
+        # Ensure config is loaded
+        config_status = ensure_kubernetes_config()
+        
+        # Check if config loaded successfully
+        if "Failed" in config_status:
+            return {
+                "status": "error",
+                "error_message": config_status,
+                "hint": "Please set KUBECONFIG environment variable or ensure ~/.kube/config exists"
+            }
         
         # Create API client
         v1 = client.CoreV1Api()
@@ -356,8 +467,16 @@ def get_deployments(namespace: str = "all") -> Dict[str, Any]:
         dict: Status and list of deployments with their details
     """
     try:
-        # Load config
-        config_status = load_kubernetes_config()
+        # Ensure config is loaded
+        config_status = ensure_kubernetes_config()
+        
+        # Check if config loaded successfully
+        if "Failed" in config_status:
+            return {
+                "status": "error",
+                "error_message": config_status,
+                "hint": "Please set KUBECONFIG environment variable or ensure ~/.kube/config exists"
+            }
         
         # Create API client
         apps_v1 = client.AppsV1Api()
@@ -439,8 +558,16 @@ def get_logs(
         dict: Status and logs from the pod
     """
     try:
-        # Load config
-        config_status = load_kubernetes_config()
+        # Ensure config is loaded
+        config_status = ensure_kubernetes_config()
+        
+        # Check if config loaded successfully
+        if "Failed" in config_status:
+            return {
+                "status": "error",
+                "error_message": config_status,
+                "hint": "Please set KUBECONFIG environment variable or ensure ~/.kube/config exists"
+            }
         
         # Create API client
         v1 = client.CoreV1Api()
@@ -555,8 +682,16 @@ def describe_pod(name: str, namespace: str = "default") -> Dict[str, Any]:
         dict: Status and detailed pod information
     """
     try:
-        # Load config
-        config_status = load_kubernetes_config()
+        # Ensure config is loaded
+        config_status = ensure_kubernetes_config()
+        
+        # Check if config loaded successfully
+        if "Failed" in config_status:
+            return {
+                "status": "error",
+                "error_message": config_status,
+                "hint": "Please set KUBECONFIG environment variable or ensure ~/.kube/config exists"
+            }
         
         # Create API client
         v1 = client.CoreV1Api()
@@ -719,32 +854,37 @@ def get_model_config():
     return gemini_model
 
 
-# Create the root agent with Kubernetes tools
-root_agent = Agent(
-    name="kubernetes_agent",
-    model=get_model_config(),  # Dynamic model selection
-    description=(
-        "An agent that can interact with Kubernetes clusters to retrieve information "
-        "about pods, nodes, services, deployments, and other Kubernetes resources."
-    ),
-    instruction=(
-        "You are a helpful Kubernetes assistant that can query and retrieve information "
-        "from Kubernetes clusters. You can list pods, nodes, services, deployments, and "
-        "namespaces. You can also get detailed information about specific resources and "
-        "retrieve logs from pod containers. "
-        "When users ask about their Kubernetes cluster, use the appropriate tools to "
-        "fetch the information they need. Always provide clear and organized responses "
-        "about the cluster state and resources. "
-        "For log requests, you can retrieve recent logs, tail a specific number of lines, "
-        "get logs from a specific time period, or even get logs from previously crashed containers."
-    ),
-    tools=[
-        get_pods,
-        get_nodes,
-        get_namespaces,
-        get_services,
-        get_deployments,
-        describe_pod,
-        get_logs
-    ]
-)
+# Only create agent if ADK is available
+if ADK_AVAILABLE:
+    # Create the root agent with Kubernetes tools
+    root_agent = Agent(
+        name="kubernetes_agent",
+        model=get_model_config(),  # Dynamic model selection
+        description=(
+            "An agent that can interact with Kubernetes clusters to retrieve information "
+            "about pods, nodes, services, deployments, and other Kubernetes resources."
+        ),
+        instruction=(
+            "You are a helpful Kubernetes assistant that can query and retrieve information "
+            "from Kubernetes clusters. You can list pods, nodes, services, deployments, and "
+            "namespaces. You can also get detailed information about specific resources and "
+            "retrieve logs from pod containers. "
+            "When users ask about their Kubernetes cluster, use the appropriate tools to "
+            "fetch the information they need. Always provide clear and organized responses "
+            "about the cluster state and resources. "
+            "For log requests, you can retrieve recent logs, tail a specific number of lines, "
+            "get logs from a specific time period, or even get logs from previously crashed containers."
+        ),
+        tools=[
+            get_pods,
+            get_nodes,
+            get_namespaces,
+            get_services,
+            get_deployments,
+            describe_pod,
+            get_logs
+        ]
+    )
+else:
+    print("Error: ADK not available. Cannot create agent.")
+    root_agent = None
