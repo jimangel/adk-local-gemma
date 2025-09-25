@@ -108,19 +108,19 @@ spec:
             memory: "2Gi"
             cpu: "1000m"
 ---
-apiVersion: v1
-kind: Service
-metadata:
-  name: adk-local-gemma
-  namespace: default
-  labels:
-    app: adk-local-gemma
-spec:
-  type: LoadBalancer
-  ports:
-  - port: 8081
-    targetPort: 8081
-    protocol: TCP
-    name: web
-  selector:
-    app: adk-local-gemma
+#apiVersion: v1
+#kind: Service
+#metadata:
+#  name: adk-local-gemma
+#  namespace: default
+#  labels:
+#    app: adk-local-gemma
+#spec:
+#  type: LoadBalancer
+#  ports:
+#  - port: 8081
+#    targetPort: 8081
+#    protocol: TCP
+#    name: web
+#  selector:
+#    app: adk-local-gemma
