@@ -31,13 +31,11 @@ kubernetes_agent/
 
 ```bash
 # Create virtual environment
-python -m venv .venv
+python3 -m venv .venv
 
 # Activate virtual environment
 # macOS/Linux:
 source .venv/bin/activate
-# Windows:
-.venv\Scripts\activate.bat
 ```
 
 ### 2. Install Dependencies
@@ -401,6 +399,90 @@ The agent uses these Python packages:
 - `kubernetes` - Official Kubernetes Python client
 - `python-dotenv` - Environment variable management
 - `litellm` - Multi-LLM support (for local models)
+
+## Docker Deployment
+
+### Build and Run Locally
+
+The project includes a Dockerfile for containerized deployment. The image is available at `ghcr.io/jimangel/adk-local-gemma:latest`.
+
+#### Run with Docker (Local Testing)
+
+```bash
+# Run the container with your kubeconfig mounted
+docker run -d \
+  --name adk-local-test \
+  -p 8082:8081 \
+  -v ~/kubespray/inventory/onemachine/artifacts/admin.conf:/home/appuser/kubeconfig:ro \
+  -e KUBECONFIG=/home/appuser/kubeconfig \
+  -e GOOGLE_API_KEY="your-api-key-here" \
+  -e LLM_TYPE="cloud" \
+  -e GEMINI_MODEL="gemini-2.5-pro" \
+  -e GOOGLE_GENAI_USE_VERTEXAI="FALSE" \
+  ghcr.io/jimangel/adk-local-gemma:latest
+```
+
+Access the web interface at http://localhost:8082
+
+#### Build Your Own Image
+
+```bash
+# Build the Docker image
+docker build -t adk-local-gemma:latest .
+
+# Tag for your registry
+docker tag adk-local-gemma:latest your-registry/adk-local-gemma:latest
+
+# Push to registry
+docker push your-registry/adk-local-gemma:latest
+```
+
+## Kubernetes Deployment
+
+The included `k8s-deployment.yaml` creates:
+- ServiceAccount with read-only cluster permissions
+- ClusterRole and ClusterRoleBinding for RBAC
+- Deployment with the ADK agent
+- LoadBalancer service to expose the web interface
+
+### Quick Deploy
+
+```bash
+# 1. Create the secret with your Google API key (one-liner)
+kubectl create secret generic adk-secrets --from-literal=GOOGLE_API_KEY="your-actual-api-key-here"
+
+# 2. Deploy the application
+kubectl apply -f k8s-deployment.yaml
+
+# 3. Check deployment status
+kubectl get pods -l app=adk-local-gemma
+kubectl get svc adk-local-gemma
+
+# kubectl port-forward svc/adk-local-gemma 8081:8081
+
+# 4. Get the LoadBalancer IP/URL
+kubectl get svc adk-local-gemma -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+```
+
+### Customization
+
+To use different LLM settings, edit the environment variables in `k8s-deployment.yaml`:
+
+```yaml
+env:
+- name: LLM_TYPE
+  value: "cloud"  # or "local" for LM Studio
+- name: GEMINI_MODEL
+  value: "gemini-2.5-pro"  # or other Gemini models
+```
+
+### Clean Up
+
+```bash
+# Remove all resources
+kubectl delete -f k8s-deployment.yaml
+kubectl delete secret adk-secrets
+```
 
 ## Support
 

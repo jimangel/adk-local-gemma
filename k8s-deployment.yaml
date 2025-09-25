@@ -1,0 +1,126 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: adk-local-gemma
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: adk-readonly
+rules:
+- apiGroups: [""]
+  resources:
+  - pods
+  - pods/log
+  - nodes
+  - namespaces
+  - services
+  - configmaps
+  - secrets
+  - endpoints
+  - persistentvolumeclaims
+  - persistentvolumes
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources:
+  - deployments
+  - daemonsets
+  - replicasets
+  - statefulsets
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["batch"]
+  resources:
+  - jobs
+  - cronjobs
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["autoscaling"]
+  resources:
+  - horizontalpodautoscalers
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["networking.k8s.io"]
+  resources:
+  - ingresses
+  - networkpolicies
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["storage.k8s.io"]
+  resources:
+  - storageclasses
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: adk-readonly-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: adk-readonly
+subjects:
+- kind: ServiceAccount
+  name: adk-local-gemma
+  namespace: default
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adk-local-gemma
+  namespace: default
+  labels:
+    app: adk-local-gemma
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: adk-local-gemma
+  template:
+    metadata:
+      labels:
+        app: adk-local-gemma
+    spec:
+      serviceAccountName: adk-local-gemma
+      containers:
+      - name: adk-local-gemma
+        image: ghcr.io/jimangel/adk-local-gemma:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8081
+          name: web
+        env:
+        - name: PORT
+          value: "8081"
+        - name: LLM_TYPE
+          value: "cloud"
+        - name: GEMINI_MODEL
+          value: "gemini-2.5-pro"
+        - name: GOOGLE_GENAI_USE_VERTEXAI
+          value: "FALSE"
+        - name: GOOGLE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: adk-secrets
+              key: GOOGLE_API_KEY
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: adk-local-gemma
+  namespace: default
+  labels:
+    app: adk-local-gemma
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 8081
+    targetPort: 8081
+    protocol: TCP
+    name: web
+  selector:
+    app: adk-local-gemma
