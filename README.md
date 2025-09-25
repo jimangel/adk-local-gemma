@@ -2,7 +2,11 @@
 
 Google ADK agent for Kubernetes cluster interaction. Supports cloud (Google Gemini) and local (OpenAI-compatible) LLMs.
 
-![Architecture diagram](pics/arch.png)
+![Running on Kubernetes](pics/arch.png)
+
+ADK Web Container:
+
+![Architecture diagram](pics/adk-arch.png)
 
 ## Features
 
@@ -17,6 +21,29 @@ Google ADK agent for Kubernetes cluster interaction. Supports cloud (Google Gemi
 - Valid kubeconfig or in-cluster permissions
 - **Cloud LLM**: Google AI Studio API key
 - **Local LLM**: OpenAI-compatible endpoint (LM Studio, Ollama, etc.)
+
+## The importance of the `LLM_TYPE` variable
+
+The code is written to demonstrate both cloud and local LLM features. To switch between features you can set `cloud` or `local`. By setting:
+
+```bash
+LLM_TYPE=cloud
+```
+
+The ADK agent leverages the cloud (Gemini) and by setting:
+
+```bash
+LLM_TYPE=local
+```
+
+The agent leverages local LLM at the endpoint of:
+
+```bash
+LM_STUDIO_API_BASE=YOUR_HTTP_URL_V1_API
+LM_STUDIO_MODEL=YOUR_MODEL_REF
+```
+
+Look at the `.env-sample` for more ideas, most of these variables are set in the `docker run` command or in the kubernetes yaml.
 
 ## Quick Start
 
@@ -47,9 +74,20 @@ docker run \
 
 # Access UI: http://localhost:8082
 
+# Run using a local LLM (ollama) - or use the host / service name in cluster ollama.svc.xxx
+
+# (optional) run ollama instance
+docker run -d --name ollama --platform=linux/arm64/v8 \
+  -p 11434:11434 -v ollama:/root/.ollama ollama/ollama:latest
+
+docker exec -it ollama ollama pull qwen3:1.7b
+
 # Run using a local LLM
-export LM_STUDIO_API_BASE=http://127.0.0.1:1234/v1/
-export LM_STUDIO_MODEL=qwen/qwen3-1.7b
+export LM_STUDIO_API_BASE=http://localhost:11434/v1/
+# export LM_STUDIO_API_BASE=http://127.0.0.1:1234/v1/
+
+#export LM_STUDIO_MODEL=qwen/qwen3-1.7b # for LM Studio
+export LM_STUDIO_MODEL=qwen3:1.7b # for Ollama
 
 docker run \
   --name adk-local-test \
@@ -77,21 +115,81 @@ The `k8s-deployment.yaml` includes:
 - ClusterRole and ClusterRoleBinding
 - Deployment configuration
 
+![Running on Kubernetes](pics/arch.png)
+
+Optionally deploy a local Ollama server:
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          ports:
+            - containerPort: 11434
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+      volumes:
+        - name: ollama-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+spec:
+  selector:
+    app: ollama
+  ports:
+    - port: 11434
+      targetPort: 11434
+      protocol: TCP
+  type: ClusterIP
+EOF
+
+# wait for it to ready up:
+kubectl get pods --watch
+
+# pull a model to use:
+kubectl exec -it deploy/ollama -- ollama pull qwen3:1.7b
+```
+
 **Deploy:**
 ```bash
-export GOOGLE_API_KEY="your-api-key"
+# Clone repo
+git clone https://github.com/jimangel/adk-local-gemma.git
+cd adk-local-gemma
 
-# 1. Create API key secret
+# (optional, or if using cloud) create API key secret
+export GOOGLE_API_KEY="your-api-key"
 kubectl create secret generic adk-secrets \
   --from-literal=GOOGLE_API_KEY=${GOOGLE_API_KEY}
+```
 
-# 2. Apply manifest
+> **Tweaking / Configuration:** Modify environment variables in `k8s-deployment.yaml` (like model path / etc if needed)
+
+```bash
+# Apply manifest (defaults to local)
 kubectl apply -f k8s-deployment.yaml
 ```
 
 **Access service:**
 ```bash
-# Option A: Port forward
+# Port forward
 kubectl port-forward svc/adk-local-gemma 8081:8081
 ```
 
@@ -104,16 +202,5 @@ kubectl delete secret adk-secrets
 kubectl exec -it deploy/adk-local-gemma -- sh
 ```
 
-**Tweaking / Configuration:**
 
-Modify environment variables in `k8s-deployment.yaml`:
 
-```yaml
-env:
-- name: LLM_TYPE
-  value: "local"  # or "local"
-- name: LM_STUDIO_MODEL
-  value: "qwen/qwen3-1.7b"
-- name: LM_STUDIO_API_BASE
-  value: "http://127.0.0.1:1234/v1"  # for local LLMs
-```

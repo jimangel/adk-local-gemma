@@ -140,3 +140,23 @@ docker tag adk-local-gemma:latest ghcr.io/jimangel/adk-local-gemma:latest
 # Push to registry
 docker push ghcr.io/jimangel/adk-local-gemma:latest
 ```
+
+
+---
+
+
+## local model cpu
+
+```bash
+docker run -d --name ollama --platform=linux/arm64/v8 \
+  -p 11434:11434 -v ollama:/root/.ollama ollama/ollama:latest
+
+docker exec -it ollama ollama pull qwen3:1.7b
+
+curl -sS http://localhost:11434/api/generate \
+  -H "Content-Type: application/json" \
+  -d '{"model":"qwen3:1.7b","prompt":"Say hello in one sentence.","stream":false}'
+
+# use
+http://localhost:11434/v1
+```
