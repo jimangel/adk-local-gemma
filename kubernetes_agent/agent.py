@@ -3,7 +3,7 @@ Kubernetes ADK Agent
 A basic ADK agent that can interact with Kubernetes clusters using either
 kubeconfig or service account authentication.
 
-Supports both cloud LLMs (Gemini) and local LLMs (LM Studio).
+Supports both cloud LLMs (Gemini) and local LLMs.
 """
 
 import datetime
@@ -13,23 +13,9 @@ from kubernetes import client, config
 from kubernetes.client import ApiException
 from dotenv import load_dotenv
 from .sub_agents.google_search_agent import google_search_agent
+from google.adk import Agent
 from google.adk.tools.agent_tool import AgentTool
-
-# Try to import ADK components
-try:
-    from google.adk import Agent
-    ADK_AVAILABLE = True
-except ImportError:
-    print("Error: Could not import ADK Agent. Please install: pip install google-adk")
-    ADK_AVAILABLE = False
-
-# Try to import LiteLlm for local model support
-try:
-    from google.adk.models.lite_llm import LiteLlm
-    LITELLM_AVAILABLE = True
-except ImportError:
-    LITELLM_AVAILABLE = False
-    print("Warning: LiteLlm not available. Local LLM support disabled.")
+from google.adk.models.lite_llm import LiteLlm
 
 # Load environment variables from .env file
 load_dotenv()
@@ -54,7 +40,22 @@ def init_kubernetes_config():
     if KUBE_CONFIG_LOADED:
         return KUBE_CONFIG_STATUS
     
-    # Try multiple config sources
+    # First, check if we're running in a Kubernetes pod
+    # by checking for the service account token file
+    sa_token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    if os.path.exists(sa_token_path):
+        # We're running inside Kubernetes - use in-cluster config
+        try:
+            config.load_incluster_config()
+            KUBE_CONFIG_LOADED = True
+            KUBE_CONFIG_STATUS = "Loaded in-cluster config (running inside Kubernetes with ServiceAccount)"
+            print(KUBE_CONFIG_STATUS)
+            return KUBE_CONFIG_STATUS
+        except Exception as e:
+            print(f"Failed to load in-cluster config: {e}")
+            # Fall through to try other methods
+    
+    # Try multiple config sources for external access
     configs_to_try = []
     
     # 1. KUBECONFIG environment variable (already expanded above)
@@ -89,19 +90,11 @@ def init_kubernetes_config():
             print(f"Failed to load config from {config_path}: {e}")
             continue
     
-    # Try in-cluster config as last resort
-    try:
-        config.load_incluster_config()
-        KUBE_CONFIG_LOADED = True
-        KUBE_CONFIG_STATUS = "Loaded in-cluster config (running inside Kubernetes)"
-        print(KUBE_CONFIG_STATUS)
-        return KUBE_CONFIG_STATUS
-    except Exception as e:
-        KUBE_CONFIG_STATUS = f"Failed to load any Kubernetes config. Tried: {[c[1] for c in configs_to_try]}"
-        print(f"Warning: {KUBE_CONFIG_STATUS}")
-        print("To fix this, set KUBECONFIG environment variable:")
-        print("  export KUBECONFIG=~/kubespray/inventory/onemachine/artifacts/admin.conf")
-        return KUBE_CONFIG_STATUS
+    # If we get here, no config was loaded
+    KUBE_CONFIG_STATUS = f"Failed to load any Kubernetes config. Tried: {[c[1] for c in configs_to_try]}"
+    print(f"Warning: {KUBE_CONFIG_STATUS}")
+    print("To fix this, set KUBECONFIG environment variable or run inside Kubernetes")
+    return KUBE_CONFIG_STATUS
 
 # Do NOT initialize config on import - let functions handle it
 # This prevents connection attempts before env vars are properly set
@@ -833,71 +826,58 @@ def get_model_config():
     llm_type = os.getenv('LLM_TYPE', 'cloud').lower()
     
     if llm_type == 'local':
-        if not LITELLM_AVAILABLE:
-            print("Error: Local LLM requested but LiteLlm not available.")
-            print("Falling back to cloud LLM (Gemini).")
-            llm_type = 'cloud'
-        else:
-            # Local LLM configuration (LM Studio)
-            lm_studio_base = os.getenv('LM_STUDIO_API_BASE', 'http://127.0.0.1:1234/v1/')
-            lm_studio_model = os.getenv('LM_STUDIO_MODEL', 'google/gemma-3-1b')
-            
-            # For LM Studio, we use openai/ prefix since it uses OpenAI-compatible API
-            # The actual model ID from LM Studio is used after the prefix
-            formatted_model = f"openai/{lm_studio_model}"
-            
-            print(f"Using Local LLM: {lm_studio_model} (formatted as {formatted_model}) at {lm_studio_base}")
-            
-            # Create LiteLlm instance with proper configuration
-            return LiteLlm(
-                model=formatted_model,
-                api_base=lm_studio_base,
-                api_key="dummy"  # LM Studio doesn't require an API key but LiteLLM expects one
-            )
+        # Local LLM configuration
+        local_api_base = os.getenv('LM_STUDIO_API_BASE', 'http://127.0.0.1:1234/v1/')
+        local_model = os.getenv('LM_STUDIO_MODEL', 'google/gemma-3-1b')
+        
+        # Format model for OpenAI-compatible API
+        formatted_model = f"openai/{local_model}"
+        
+        print(f"Using Local LLM API: {local_model} at {local_api_base}")
+        
+        # Create LiteLlm instance
+        return LiteLlm(
+            model=formatted_model,
+            api_base=local_api_base,
+            api_key="dummy"  # Most local LLMs don't require an API key but LiteLLM expects one
+        )
     
     # Cloud LLM configuration (Gemini)
-    # Default to Gemini 2.5 Pro for best performance
     gemini_model = os.getenv('GEMINI_MODEL', 'gemini-2.5-pro')
-    
     print(f"Using Cloud LLM: {gemini_model}")
     return gemini_model
 
-# Only create agent if ADK is available
-if ADK_AVAILABLE:
-    # Create the root agent with Kubernetes tools
-    # Get today's date for the instruction
-    today_date = datetime.date.today().strftime("%A, %B %d, %Y")
-    
-    root_agent = Agent(
-        name="kubernetes_agent",
-        model=get_model_config(),  # Dynamic model selection
-        description=(
-            "An agent that can interact with Kubernetes clusters to retrieve information "
-            "about pods, nodes, services, deployments, and other Kubernetes resources."
-        ),
-        instruction=(
-            f"You are a helpful Kubernetes assistant that can query and retrieve information "
-            f"from Kubernetes clusters. Today is {today_date}."
-            f"You can list pods, nodes, services, deployments, and "
-            f"namespaces. You can also get detailed information about specific resources and "
-            f"retrieve logs from pod containers. "
-            f"When users ask about their Kubernetes cluster, use the appropriate tools to "
-            f"fetch the information they need. Always provide clear and organized responses "
-            f"about the cluster state and resources. "
-            f"For log requests, you can retrieve recent logs, tail a specific number of lines, "
-            f"get logs from a specific time period, or even get logs from previously crashed containers."
-        ),
-        tools=[
-            get_pods,
-            get_nodes,
-            get_namespaces,
-            get_services,
-            get_deployments,
-            describe_pod,
-            get_logs,
-            AgentTool(agent=google_search_agent),
-        ]
-    )
-else:
-    print("Error: ADK not available. Cannot create agent.")
-    root_agent = None
+# Create the root agent with Kubernetes tools
+# Get today's date for the instruction
+today_date = datetime.date.today().strftime("%A, %B %d, %Y")
+
+root_agent = Agent(
+    name="kubernetes_agent",
+    model=get_model_config(),  # Dynamic model selection
+    description=(
+        "An agent that can interact with Kubernetes clusters to retrieve information "
+        "about pods, nodes, services, deployments, and other Kubernetes resources."
+    ),
+    instruction=(
+        f"You are a helpful Kubernetes assistant that can query and retrieve information "
+        f"from Kubernetes clusters. Today is {today_date}. "
+        f"You can list pods, nodes, services, deployments, and "
+        f"namespaces. You can also get detailed information about specific resources and "
+        f"retrieve logs from pod containers. "
+        f"When users ask about their Kubernetes cluster, use the appropriate tools to "
+        f"fetch the information they need. Always provide clear and organized responses "
+        f"about the cluster state and resources. "
+        f"For log requests, you can retrieve recent logs, tail a specific number of lines, "
+        f"get logs from a specific time period, or even get logs from previously crashed containers."
+    ),
+    tools=[
+        get_pods,
+        get_nodes,
+        get_namespaces,
+        get_services,
+        get_deployments,
+        describe_pod,
+        get_logs,
+        AgentTool(agent=google_search_agent),
+    ]
+)

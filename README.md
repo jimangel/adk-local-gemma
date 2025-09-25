@@ -93,10 +93,6 @@ kubectl apply -f k8s-deployment.yaml
 ```bash
 # Option A: Port forward
 kubectl port-forward svc/adk-local-gemma 8081:8081
-
-# Option B: LoadBalancer (if available)
-kubectl get svc adk-local-gemma \
-  -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
 ```
 
 **Clean up:**
@@ -108,27 +104,16 @@ kubectl delete secret adk-secrets
 kubectl exec -it deploy/adk-local-gemma -- sh
 ```
 
-## Configuration
+**Tweaking / Configuration:**
 
 Modify environment variables in `k8s-deployment.yaml`:
 
 ```yaml
 env:
 - name: LLM_TYPE
-  value: "cloud"  # or "local"
-- name: GEMINI_MODEL
-  value: "gemini-2.5-pro"
-- name: LOCAL_LLM_URL
-  value: "http://localhost:1234/v1"  # for local LLMs
+  value: "local"  # or "local"
+- name: LM_STUDIO_MODEL
+  value: "qwen/qwen3-1.7b"
+- name: LM_STUDIO_API_BASE
+  value: "http://127.0.0.1:1234/v1"  # for local LLMs
 ```
-
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `LLM_TYPE` | `cloud` or `local` | `cloud` |
-| `GOOGLE_API_KEY` | Google AI Studio API key | Required for cloud |
-| `GEMINI_MODEL` | Gemini model name | `gemini-2.5-pro` |
-| `LOCAL_LLM_URL` | OpenAI-compatible endpoint | `http://localhost:1234/v1` |
-| `KUBECONFIG` | Path to kubeconfig file | In-cluster config |
-| `GOOGLE_GENAI_USE_VERTEXAI` | Use Vertex AI | `FALSE` |

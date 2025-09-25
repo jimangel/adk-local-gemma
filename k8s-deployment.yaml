@@ -89,8 +89,6 @@ spec:
         env:
         - name: PORT
           value: "8081"
-        - name: LLM_TYPE
-          value: "cloud"
         - name: GEMINI_MODEL
           value: "gemini-2.5-pro"
         - name: GOOGLE_GENAI_USE_VERTEXAI
@@ -100,6 +98,12 @@ spec:
             secretKeyRef:
               name: adk-secrets
               key: GOOGLE_API_KEY
+        - name: LLM_TYPE
+          value: "cloud" # one of "cloud" or "local"
+        - name: LM_STUDIO_MODEL
+          value: "qwen/qwen3-1.7b"
+        - name: LM_STUDIO_API_BASE
+          value: "http://127.0.0.1:1234/v1" # NEEDS TO BE REACHABLE / OR USE HOST NETWORK
         resources:
           requests:
             memory: "512Mi"
