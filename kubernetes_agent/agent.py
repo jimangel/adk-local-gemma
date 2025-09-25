@@ -6,12 +6,14 @@ kubeconfig or service account authentication.
 Supports both cloud LLMs (Gemini) and local LLMs (LM Studio).
 """
 
+import datetime
 import os
-import json
 from typing import Dict, List, Optional, Any
 from kubernetes import client, config
 from kubernetes.client import ApiException
 from dotenv import load_dotenv
+from .sub_agents.google_search_agent import google_search_agent
+from google.adk.tools.agent_tool import AgentTool
 
 # Try to import ADK components
 try:
@@ -854,16 +856,18 @@ def get_model_config():
             )
     
     # Cloud LLM configuration (Gemini)
-    # Default to Gemini 2.0 Pro for best performance
-    gemini_model = os.getenv('GEMINI_MODEL', 'gemini-2.0-pro-exp')
+    # Default to Gemini 2.5 Pro for best performance
+    gemini_model = os.getenv('GEMINI_MODEL', 'gemini-2.5-pro')
     
     print(f"Using Cloud LLM: {gemini_model}")
     return gemini_model
 
-
 # Only create agent if ADK is available
 if ADK_AVAILABLE:
     # Create the root agent with Kubernetes tools
+    # Get today's date for the instruction
+    today_date = datetime.date.today().strftime("%A, %B %d, %Y")
+    
     root_agent = Agent(
         name="kubernetes_agent",
         model=get_model_config(),  # Dynamic model selection
@@ -872,15 +876,16 @@ if ADK_AVAILABLE:
             "about pods, nodes, services, deployments, and other Kubernetes resources."
         ),
         instruction=(
-            "You are a helpful Kubernetes assistant that can query and retrieve information "
-            "from Kubernetes clusters. You can list pods, nodes, services, deployments, and "
-            "namespaces. You can also get detailed information about specific resources and "
-            "retrieve logs from pod containers. "
-            "When users ask about their Kubernetes cluster, use the appropriate tools to "
-            "fetch the information they need. Always provide clear and organized responses "
-            "about the cluster state and resources. "
-            "For log requests, you can retrieve recent logs, tail a specific number of lines, "
-            "get logs from a specific time period, or even get logs from previously crashed containers."
+            f"You are a helpful Kubernetes assistant that can query and retrieve information "
+            f"from Kubernetes clusters. Today is {today_date}."
+            f"You can list pods, nodes, services, deployments, and "
+            f"namespaces. You can also get detailed information about specific resources and "
+            f"retrieve logs from pod containers. "
+            f"When users ask about their Kubernetes cluster, use the appropriate tools to "
+            f"fetch the information they need. Always provide clear and organized responses "
+            f"about the cluster state and resources. "
+            f"For log requests, you can retrieve recent logs, tail a specific number of lines, "
+            f"get logs from a specific time period, or even get logs from previously crashed containers."
         ),
         tools=[
             get_pods,
@@ -889,7 +894,8 @@ if ADK_AVAILABLE:
             get_services,
             get_deployments,
             describe_pod,
-            get_logs
+            get_logs,
+            AgentTool(agent=google_search_agent),
         ]
     )
 else:

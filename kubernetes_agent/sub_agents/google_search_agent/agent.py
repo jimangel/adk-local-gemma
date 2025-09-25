@@ -1,7 +1,8 @@
+import os
 from google.adk import Agent
 from google.adk.tools import google_search
 
-MODEL = "gemini-2.5-pro-preview-05-06"
+MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.5-pro')
 
 google_search_agent = Agent(
     model=MODEL,
