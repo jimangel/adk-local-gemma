@@ -838,13 +838,20 @@ def get_model_config():
         else:
             # Local LLM configuration (LM Studio)
             lm_studio_base = os.getenv('LM_STUDIO_API_BASE', 'http://127.0.0.1:1234/v1/')
-            lm_studio_model = os.getenv('LM_STUDIO_MODEL', 'lm_studio/qwen3-1.7b')
+            lm_studio_model = os.getenv('LM_STUDIO_MODEL', 'google/gemma-3-1b')
             
-            # Set the API base for LM Studio
-            os.environ['LM_STUDIO_API_BASE'] = lm_studio_base
+            # For LM Studio, we use openai/ prefix since it uses OpenAI-compatible API
+            # The actual model ID from LM Studio is used after the prefix
+            formatted_model = f"openai/{lm_studio_model}"
             
-            print(f"Using Local LLM: {lm_studio_model} at {lm_studio_base}")
-            return LiteLlm(model=lm_studio_model)
+            print(f"Using Local LLM: {lm_studio_model} (formatted as {formatted_model}) at {lm_studio_base}")
+            
+            # Create LiteLlm instance with proper configuration
+            return LiteLlm(
+                model=formatted_model,
+                api_base=lm_studio_base,
+                api_key="dummy"  # LM Studio doesn't require an API key but LiteLLM expects one
+            )
     
     # Cloud LLM configuration (Gemini)
     # Default to Gemini 2.0 Pro for best performance
