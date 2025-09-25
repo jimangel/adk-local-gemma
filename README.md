@@ -1,416 +1,410 @@
-# ADK with Local Gemma Model on Kubernetes
+# Kubernetes Local/Cloud ADK Demo
 
-This repository demonstrates using ADK with a local Gemma model running in Ollama on Kubernetes, plus additional deployments for Nginx and ADK with shared storage.
+![](pics/image.png)
 
-## Prerequisites
+A Google ADK agent that can interact with Kubernetes clusters to retrieve information about pods, nodes, services, deployments, and other resources. Supports both cloud LLMs (Google Gemini) and local LLMs (LM Studio).
 
-- Kubernetes cluster with GPU support (optional, can run on CPU)
-- kubectl configured to access your cluster
+## Features
 
-## Deployments
+- **Flexible LLM Support**: Use either Google Gemini (cloud) or LM Studio (local) models
+- **Flexible Authentication**: Supports both kubeconfig file and in-cluster service account authentication
+- **Comprehensive Resource Queries**: List and describe pods, nodes, namespaces, services, and deployments
+- **Log Retrieval**: Get pod logs with filtering options
+- **Local Testing**: Test locally with `adk web` interface
+- **Detailed Information**: Get comprehensive details about Kubernetes resources
 
-### 1. Ollama with Gemma Model
+## Project Structure
 
-#### Option A: GPU Deployment with Local Storage
-
-Deploy Ollama with GPU support and Gemma model using hostPath storage:
-
-```bash
-# Create namespace
-kubectl create namespace ollama-system
-
-# Deploy Ollama with GPU
-cat <<EOF | kubectl apply -f -
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: ollama-gpu
-  namespace: ollama-system
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: ollama-gpu
-  template:
-    metadata:
-      labels:
-        app: ollama-gpu
-    spec:
-      containers:
-      - name: ollama
-        image: ollama/ollama:latest
-        ports:
-        - containerPort: 11434
-        env:
-        - name: OLLAMA_HOST
-          value: "0.0.0.0"
-        volumeMounts:
-        - name: ollama-storage
-          mountPath: /root/.ollama
-        resources:
-          limits:
-            nvidia.com/gpu: 1
-          requests:
-            memory: "8Gi"
-            cpu: "4"
-        command: ["/bin/bash", "-c"]
-        args:
-        - |
-          ollama serve &
-          sleep 10
-          ollama pull gemma:2b
-          wait
-      volumes:
-      - name: ollama-storage
-        hostPath:
-          path: /var/ollama-data
-          type: DirectoryOrCreate
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: ollama-service
-  namespace: ollama-system
-spec:
-  selector:
-    app: ollama-gpu
-  ports:
-  - protocol: TCP
-    port: 11434
-    targetPort: 11434
-  type: ClusterIP
-EOF
+```
+kubernetes_agent/
+    __init__.py       # Module initialization
+    agent.py          # Main agent implementation
+    .env              # Environment configuration
+    requirements.txt  # Python dependencies
+    test_config.py    # Configuration test script
+    README.md         # This file
 ```
 
-#### Option B: CPU Deployment with Local Storage
+## Setup Instructions
 
-Deploy Ollama on CPU with hostPath storage:
+### 1. Create Virtual Environment
 
 ```bash
-# Deploy Ollama with CPU and local storage
-cat <<EOF | kubectl apply -f -
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: ollama-cpu
-  namespace: ollama-system
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: ollama-cpu
-  template:
-    metadata:
-      labels:
-        app: ollama-cpu
-    spec:
-      containers:
-      - name: ollama
-        image: ollama/ollama:latest
-        ports:
-        - containerPort: 11434
-        env:
-        - name: OLLAMA_HOST
-          value: "0.0.0.0"
-        volumeMounts:
-        - name: ollama-storage
-          mountPath: /root/.ollama
-        resources:
-          requests:
-            memory: "4Gi"
-            cpu: "2"
-          limits:
-            memory: "8Gi"
-            cpu: "4"
-        command: ["/bin/bash", "-c"]
-        args:
-        - |
-          ollama serve &
-          sleep 10
-          ollama pull gemma:2b
-          wait
-      volumes:
-      - name: ollama-storage
-        hostPath:
-          path: /var/ollama-data
-          type: DirectoryOrCreate
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: ollama-cpu-service
-  namespace: ollama-system
-spec:
-  selector:
-    app: ollama-cpu
-  ports:
-  - protocol: TCP
-    port: 11434
-    targetPort: 11434
-  type: ClusterIP
-EOF
+# Create virtual environment
+python -m venv .venv
+
+# Activate virtual environment
+# macOS/Linux:
+source .venv/bin/activate
+# Windows:
+.venv\Scripts\activate.bat
 ```
 
-### 2. Nginx Deployment
-
-Deploy a simple Nginx web server:
+### 2. Install Dependencies
 
 ```bash
-# Deploy Nginx
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: web-apps
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: nginx-config
-  namespace: web-apps
-data:
-  index.html: |
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Kubernetes Nginx</title>
-    </head>
-    <body>
-        <h1>Welcome to Nginx on Kubernetes!</h1>
-        <p>This page is served from a Kubernetes pod.</p>
-    </body>
-    </html>
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: nginx
-  namespace: web-apps
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: nginx
-  template:
-    metadata:
-      labels:
-        app: nginx
-    spec:
-      containers:
-      - name: nginx
-        image: nginx:latest
-        ports:
-        - containerPort: 80
-        volumeMounts:
-        - name: nginx-content
-          mountPath: /usr/share/nginx/html
-        - name: nginx-logs
-          mountPath: /var/log/nginx
-        resources:
-          requests:
-            memory: "128Mi"
-            cpu: "100m"
-          limits:
-            memory: "256Mi"
-            cpu: "200m"
-      volumes:
-      - name: nginx-content
-        configMap:
-          name: nginx-config
-      - name: nginx-logs
-        emptyDir: {}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: nginx-service
-  namespace: web-apps
-spec:
-  selector:
-    app: nginx
-  ports:
-  - protocol: TCP
-    port: 80
-    targetPort: 80
-  type: LoadBalancer
-EOF
+pip install -r requirements.txt
 ```
 
-### 3. ADK Deployment with Shared Storage
+### 3. Configure Environment
 
-Deploy ADK as a sidecar container sharing storage with Nginx to read logs:
+Edit the `.env` file with your configuration:
+
+#### Option A: Cloud LLM (Google Gemini) - Default
 
 ```bash
-# Deploy ADK with shared storage for log reading
-cat <<EOF | kubectl apply -f -
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: nginx-with-adk
-  namespace: web-apps
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: nginx-with-adk
-  template:
-    metadata:
-      labels:
-        app: nginx-with-adk
-    spec:
-      containers:
-      # Nginx container
-      - name: nginx
-        image: nginx:latest
-        ports:
-        - containerPort: 80
-        volumeMounts:
-        - name: shared-logs
-          mountPath: /var/log/nginx
-        - name: nginx-config
-          mountPath: /etc/nginx/conf.d
-        resources:
-          requests:
-            memory: "128Mi"
-            cpu: "100m"
-      # ADK container for log analysis
-      - name: adk-log-reader
-        image: busybox:latest
-        command: ["/bin/sh", "-c"]
-        args:
-        - |
-          echo "ADK Log Reader Started"
-          while true; do
-            echo "=== Nginx Access Logs (Last 10 lines) ==="
-            tail -n 10 /var/log/nginx/access.log 2>/dev/null || echo "No access logs yet"
-            echo ""
-            echo "=== Nginx Error Logs (Last 10 lines) ==="
-            tail -n 10 /var/log/nginx/error.log 2>/dev/null || echo "No error logs yet"
-            echo ""
-            sleep 30
-          done
-        volumeMounts:
-        - name: shared-logs
-          mountPath: /var/log/nginx
-          readOnly: true
-        resources:
-          requests:
-            memory: "64Mi"
-            cpu: "50m"
-          limits:
-            memory: "128Mi"
-            cpu: "100m"
-      volumes:
-      - name: shared-logs
-        emptyDir: {}
-      - name: nginx-config
-        configMap:
-          name: nginx-log-config
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: nginx-log-config
-  namespace: web-apps
-data:
-  custom.conf: |
-    server {
-        listen 80;
-        server_name localhost;
-        
-        access_log /var/log/nginx/access.log;
-        error_log /var/log/nginx/error.log;
-        
-        location / {
-            root /usr/share/nginx/html;
-            index index.html;
-        }
-    }
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: nginx-adk-service
-  namespace: web-apps
-spec:
-  selector:
-    app: nginx-with-adk
-  ports:
-  - protocol: TCP
-    port: 80
-    targetPort: 80
-  type: ClusterIP
-EOF
+# Choose LLM type
+LLM_TYPE=cloud
+
+# Google AI Studio API Key
+GOOGLE_GENAI_USE_VERTEXAI=FALSE
+GOOGLE_API_KEY=your_actual_api_key_here
+
+# Gemini model (default: gemini-2.0-pro-exp)
+GEMINI_MODEL=gemini-2.0-pro-exp
+
+# Kubernetes Configuration
+KUBECONFIG=${HOME}/kubespray/inventory/onemachine/artifacts/admin.conf
 ```
 
-## Verification Commands
+Get your Gemini API key from [Google AI Studio](https://aistudio.google.com/).
 
-After deploying, use these commands to verify your deployments:
+#### Option B: Local LLM (LM Studio)
+
+1. Download and install [LM Studio](https://lmstudio.ai/)
+2. Load a model in LM Studio (e.g., Qwen, Llama, Mistral)
+3. Enable the server in LM Studio (Developer tab → Enable Server)
+4. Configure `.env`:
 
 ```bash
-# Check Ollama deployment
-kubectl get pods -n ollama-system
-kubectl logs -n ollama-system -l app=ollama-gpu  # or app=ollama-cpu
+# Choose LLM type
+LLM_TYPE=local
 
-# Test Ollama API
-kubectl port-forward -n ollama-system svc/ollama-service 11434:11434
-# In another terminal:
-curl http://localhost:11434/api/tags
+# LM Studio settings
+LM_STUDIO_API_BASE=http://127.0.0.1:1234/v1/
+LM_STUDIO_MODEL=lm_studio/qwen3-1.7b
 
-# Check Nginx deployment
-kubectl get pods -n web-apps
-kubectl get svc -n web-apps
-
-# Check ADK log reader
-kubectl logs -n web-apps -l app=nginx-with-adk -c adk-log-reader
-
-# Access Nginx web page
-kubectl port-forward -n web-apps svc/nginx-service 8080:80
-# Browse to http://localhost:8080
+# Kubernetes Configuration
+KUBECONFIG=${HOME}/kubespray/inventory/onemachine/artifacts/admin.conf
 ```
 
-## Cleanup
+### 4. Test Your Configuration
 
-To remove all deployments:
+Run the test script to verify everything is configured correctly:
 
 ```bash
-kubectl delete namespace ollama-system
-kubectl delete namespace web-apps
+python test_config.py
 ```
 
-## Using ADK with the Local Gemma Model
+This will check:
+- LLM configuration (Cloud or Local)
+- Kubernetes connectivity
+- ADK package installation
 
-Once Ollama is running with the Gemma model, you can configure ADK to use it:
+### 5. Verify Kubernetes Access
+
+Before running the agent, verify your kubeconfig works:
 
 ```bash
-# Port-forward Ollama service
-kubectl port-forward -n ollama-system svc/ollama-service 11434:11434 &
+export KUBECONFIG=${HOME}/kubespray/inventory/onemachine/artifacts/admin.conf
+kubectl get nodes
+kubectl get pods --all-namespaces
+```
 
-# Configure ADK to use local Ollama
-export OLLAMA_HOST=http://localhost:11434
+## Running the Agent
 
-# Run ADK web interface
+### Using ADK Web Interface (Recommended for Testing)
+
+Navigate to the parent directory of your agent project and run:
+
+```bash
 adk web
 ```
 
-## Notes
+This will launch a browser-based interface where you can interact with the agent.
 
-- The deployments use hostPath storage which stores data at `/var/ollama-data` on the node
-- The GPU deployment requires nodes with NVIDIA GPU support and appropriate drivers installed
-- The ADK log reader continuously monitors Nginx logs every 30 seconds
-- Adjust resource limits based on your cluster capacity and model requirements
-- For production use, consider using proper PersistentVolumes for better data management
+### Using Terminal
+
+```bash
+adk run
+```
+
+### Using API Server
+
+```bash
+adk api_server
+```
+
+## LLM Configuration Options
+
+### Cloud Models (Gemini)
+
+When using `LLM_TYPE=cloud`, you can choose from these Gemini models:
+
+- `gemini-2.0-pro-exp` (Default) - Most capable, best for complex queries
+- `gemini-2.0-flash-exp` - Faster, good for simpler queries
+- `gemini-1.5-pro` - Previous generation pro model
+- `gemini-1.5-flash` - Previous generation fast model
+
+### Local Models (LM Studio)
+
+When using `LLM_TYPE=local`, you can use any model loaded in LM Studio:
+
+Popular options:
+- **Qwen** models (e.g., `qwen3-1.7b`, `qwen2.5-7b`)
+- **Llama** models (e.g., `llama-3.2-3b`, `llama-3.1-8b`)
+- **Mistral** models (e.g., `mistral-7b`)
+- **Phi** models (e.g., `phi-3-mini`)
+
+To switch models:
+1. Load the desired model in LM Studio
+2. Update `LM_STUDIO_MODEL` in `.env`
+3. Restart the ADK agent
+
+### Choosing Between Cloud and Local
+
+**Use Cloud (Gemini) when:**
+- You need the most capable model
+- You want minimal setup
+- You have a stable internet connection
+- You're okay with API costs
+
+**Use Local (LM Studio) when:**
+- You want to run completely offline
+- You have privacy/security concerns
+- You want zero API costs
+- You're testing/developing frequently
+
+### Quick Switching Between LLMs
+
+To quickly switch between cloud and local LLMs without editing `.env`:
+
+```bash
+# Use local LLM temporarily
+export LLM_TYPE=local
+adk web
+
+# Use cloud LLM temporarily
+export LLM_TYPE=cloud
+adk web
+```
+
+Or create shell aliases for convenience:
+
+```bash
+# Add to ~/.bashrc or ~/.zshrc
+alias adk-local='LLM_TYPE=local adk web'
+alias adk-cloud='LLM_TYPE=cloud adk web'
+```
+
+## Available Tools/Functions
+
+### 1. `get_pods(namespace="all", label_selector=None)`
+Lists pods in the cluster.
+- **namespace**: Specify namespace or "all" for all namespaces
+- **label_selector**: Optional label selector (e.g., "app=nginx")
+
+### 2. `get_nodes()`
+Lists all nodes in the cluster with their status and resources.
+
+### 3. `get_namespaces()`
+Lists all namespaces in the cluster.
+
+### 4. `get_services(namespace="all")`
+Lists services in the cluster.
+- **namespace**: Specify namespace or "all" for all namespaces
+
+### 5. `get_deployments(namespace="all")`
+Lists deployments in the cluster.
+- **namespace**: Specify namespace or "all" for all namespaces
+
+### 6. `describe_pod(name, namespace="default")`
+Gets detailed information about a specific pod.
+- **name**: Pod name
+- **namespace**: Pod namespace
+
+### 7. `get_logs(pod_name, namespace="default", container=None, previous=False, tail_lines=None, since_seconds=None, timestamps=False)`
+Retrieves logs from a pod container.
+- **pod_name**: Name of the pod
+- **namespace**: Namespace of the pod
+- **container**: Container name (required if pod has multiple containers)
+- **previous**: Get logs from previous terminated container
+- **tail_lines**: Number of lines from the end (e.g., 100)
+- **since_seconds**: Get logs from last N seconds (e.g., 3600 for last hour)
+- **timestamps**: Include timestamps in output
+
+## Example Queries to Try
+
+Once the agent is running, try these queries:
+
+1. **Basic Queries:**
+   - "Show me all pods in the cluster"
+   - "List all nodes and their status"
+   - "What namespaces exist?"
+
+2. **Filtered Queries:**
+   - "Show me pods in the default namespace"
+   - "List services in the kube-system namespace"
+   - "Show me all deployments"
+
+3. **Detailed Queries:**
+   - "Describe the pod named nginx-deployment-xxx in default namespace"
+   - "How many pods are running on each node?"
+   - "Which pods are not in Running state?"
+
+4. **Log Queries:**
+   - "Show me the logs for pod nginx-xxx"
+   - "Get the last 50 lines of logs from pod my-app in namespace production"
+   - "Show me logs from the last hour for pod backend-api"
+   - "Get previous container logs for crashed pod my-pod"
+   - "Show logs with timestamps for debugging pod worker-123"
+
+## Authentication Methods
+
+The agent supports multiple authentication methods in order of preference:
+
+1. **Explicit kubeconfig path**: Passed directly to functions
+2. **KUBECONFIG environment variable**: Set in `.env` or shell
+3. **In-cluster config**: For running inside a Kubernetes pod
+4. **Default location**: `~/.kube/config`
 
 ## Troubleshooting
 
-If pods are not starting:
+### LM Studio Connection Issues
+
+If you're using local LLM and encounter connection errors:
+
+1. Verify LM Studio server is running:
+   - Open LM Studio → Developer tab → Enable "Server"
+   - Check the server URL matches your `.env` setting
+
+2. Test the connection:
+   ```bash
+   curl http://127.0.0.1:1234/v1/models
+   ```
+
+3. Check the model is loaded:
+   - In LM Studio, ensure a model is selected and loaded
+   - The model name in `.env` should match
+
+### Connection Issues
+
+If you encounter connection issues:
+
+1. Verify your kubeconfig is valid:
+   ```bash
+   kubectl cluster-info
+   ```
+
+2. Check the KUBECONFIG environment variable:
+   ```bash
+   echo $KUBECONFIG
+   ```
+
+3. Ensure the cluster is accessible:
+   ```bash
+   kubectl get nodes
+   ```
+
+### Permission Issues
+
+If you get permission errors, ensure your kubeconfig has the necessary RBAC permissions:
 ```bash
-# Check pod events
-kubectl describe pod <pod-name> -n <namespace>
+kubectl auth can-i list pods --all-namespaces
+kubectl auth can-i list nodes
+```
 
-# Check resource availability
-kubectl top nodes
-kubectl top pods -n <namespace>
+### SSL/Certificate Issues
 
-# Check GPU availability (if using GPU)
-kubectl describe nodes | grep -A 5 "nvidia.com/gpu"
+If you encounter SSL verification issues with self-signed certificates, you may need to configure the kubernetes client to skip verification (not recommended for production):
+
+```python
+# In agent.py, after loading config:
+from kubernetes import client
+configuration = client.Configuration.get_default_copy()
+configuration.verify_ssl = False
+client.Configuration.set_default(configuration)
+```
+
+## Best Practices
+
+1. **Security**: Never commit your `.env` file with actual API keys to version control
+2. **RBAC**: Use service accounts with minimal required permissions
+3. **Error Handling**: The agent includes comprehensive error handling for API failures
+4. **Resource Limits**: Be mindful of API rate limits when querying large clusters
+
+## Extending the Agent
+
+To add more Kubernetes functionality:
+
+1. Import additional Kubernetes API clients:
+   ```python
+   from kubernetes import client
+   batch_v1 = client.BatchV1Api()  # For Jobs
+   networking_v1 = client.NetworkingV1Api()  # For Ingresses
+   ```
+
+2. Create new tool functions following the pattern:
+   ```python
+   def get_jobs(namespace: str = "all") -> Dict[str, Any]:
+       # Implementation
+       pass
+   ```
+
+3. Add the new tools to the agent:
+   ```python
+   tools=[..., get_jobs]
+   ```
+
+### Example: Adding ConfigMap Support
+
+```python
+def get_configmaps(namespace: str = "all") -> Dict[str, Any]:
+    try:
+        config_status = load_kubernetes_config()
+        v1 = client.CoreV1Api()
+        
+        if namespace.lower() == "all":
+            configmaps = v1.list_config_map_for_all_namespaces(watch=False)
+        else:
+            configmaps = v1.list_namespaced_config_map(namespace=namespace, watch=False)
+        
+        cm_list = [
+            {
+                "name": cm.metadata.name,
+                "namespace": cm.metadata.namespace,
+                "data_keys": list(cm.data.keys()) if cm.data else []
+            }
+            for cm in configmaps.items
+        ]
+        
+        return {
+            "status": "success",
+            "configmaps": cm_list
+        }
+    except Exception as e:
+        return {"status": "error", "error_message": str(e)}
+```
+
+## Requirements
+
+- Python 3.9+
+- Access to a Kubernetes cluster
+- Valid kubeconfig or in-cluster permissions
+- **For Cloud LLM**: Google AI Studio API key (for Gemini model)
+- **For Local LLM**: LM Studio installed with a model loaded
+
+## Dependencies
+
+The agent uses these Python packages:
+- `google-adk` - Google Agent Development Kit
+- `kubernetes` - Official Kubernetes Python client
+- `python-dotenv` - Environment variable management
+- `litellm` - Multi-LLM support (for local models)
+
+## Support
+
+For issues related to:
+- **ADK**: Check the [Google ADK documentation](https://cloud.google.com/agent-development-kit)
+- **Kubernetes Python Client**: See [kubernetes-client/python](https://github.com/kubernetes-client/python)
+- **Kubernetes API**: Refer to [Kubernetes API documentation](https://kubernetes.io/docs/reference/)

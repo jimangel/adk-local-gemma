@@ -1,0 +1,5 @@
+google-adk
+kubernetes>=30.0.0
+python-dotenv
+litellm  # For local LLM support
+requests  # For testing LM Studio connection
